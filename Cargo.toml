@@ -24,6 +24,11 @@ strsim = "0.11"
 [profile.release]
 debug = 1
 
+# Windows: the prebuilt static ONNX Runtime needs DirectML.lib, which cross-compiling from Linux lacks.
+# Load onnxruntime.dll (1.22.x, shipped next to the exe) at runtime instead.
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.10", features = ["load-dynamic"] }
+
 [lib]
 name = "chadvision"
 crate-type = ["cdylib", "rlib"]

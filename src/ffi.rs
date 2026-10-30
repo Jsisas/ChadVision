@@ -38,6 +38,12 @@ fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
 }
 
 fn open(dir: &Path) -> anyhow::Result<CvEngine> {
+    // Explicit path: a bare "onnxruntime.dll" could resolve to an older copy in System32.
+    #[cfg(windows)]
+    {
+        let exe_dir = std::env::current_exe()?.parent().map(Path::to_path_buf).unwrap_or_default();
+        ort::init_from(exe_dir.join("onnxruntime.dll").to_string_lossy()).commit()?;
+    }
     let refs_dir = dir.join("refs");
     let models = dir.join("models");
     let catalog = Arc::new(Catalog::load(&refs_dir)?);

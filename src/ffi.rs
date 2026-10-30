@@ -1,6 +1,6 @@
-//! C ABI for embedding the Fusion icon identifier (see `CvCandidate`).
+//! C ABI for the icon identifier with hover-tooltip name correction (see `CvCandidate`).
 use crate::catalog::Catalog;
-use crate::methods::{embed::Embed, fusion::Fusion, ocr::Ocr, Identifier, Input};
+use crate::methods::{corrected::Corrected, embed::Embed, fusion::Fusion, ocr::Ocr, Identifier, Input, Tooltip};
 use crate::refs;
 use image::RgbImage;
 use std::cell::RefCell;
@@ -19,7 +19,7 @@ pub struct CvCandidate {
 pub struct CvEngine {
     #[allow(dead_code)]
     catalog: Arc<Catalog>,
-    fusion: Fusion,
+    corrected: Corrected,
 }
 
 thread_local! {
@@ -55,8 +55,9 @@ fn open(dir: &Path) -> anyhow::Result<CvEngine> {
         &models.join("ppocrv5_latin_dict.txt"),
     )?);
     drop(bases);
-    let fusion = Fusion::new(catalog.clone(), embed, ocr);
-    Ok(CvEngine { catalog, fusion })
+    let fusion = Arc::new(Fusion::new(catalog.clone(), embed, ocr.clone()));
+    let corrected = Corrected::new(catalog.clone(), fusion, ocr);
+    Ok(CvEngine { catalog, corrected })
 }
 
 /// Returns null on error; see `cv_last_error`.
@@ -83,8 +84,10 @@ pub extern "C" fn cv_open(data_dir: *const c_char) -> *mut CvEngine {
     }
 }
 
-/// `bgr`: rows of 3-byte B,G,R pixels, `stride` bytes per row. Returns candidate count or -1.
+/// `bgr`: crop rows of B,G,R; `screen_bgr` (nullable): full scan screenshot, cursor at (`mouse_x`,`mouse_y`),
+/// used to read EFT's hover tooltip name. Returns candidate count or -1.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub extern "C" fn cv_identify(
     e: *const CvEngine,
     bgr: *const u8,
@@ -93,6 +96,13 @@ pub extern "C" fn cv_identify(
     stride: u32,
     slot_w: u32,
     slot_h: u32,
+    screen_bgr: *const u8,
+    screen_width: u32,
+    screen_height: u32,
+    screen_stride: u32,
+    mouse_x: i32,
+    mouse_y: i32,
+    scale: f32,
     out: *mut CvCandidate,
     cap: u32,
 ) -> i32 {
@@ -100,10 +110,21 @@ pub extern "C" fn cv_identify(
         set_error("invalid argument".into());
         return -1;
     }
+    if !screen_bgr.is_null() && (screen_width == 0 || screen_height == 0 || screen_stride < screen_width.saturating_mul(3)) {
+        set_error("invalid screen argument".into());
+        return -1;
+    }
     let result = catch_unwind(AssertUnwindSafe(|| {
         let engine = unsafe { &*e };
         let crop = unsafe { bgr_to_rgb(bgr, width, height, stride) };
-        let cands = engine.fusion.identify(&Input { crop: &crop, slots: (slot_w, slot_h), tooltip: None });
+        let tooltip = (!screen_bgr.is_null())
+            .then(|| {
+                let screen = unsafe { bgr_to_rgb(screen_bgr, screen_width, screen_height, screen_stride) };
+                let (image, mouse) = crate::dataset::tip_window(&screen, (mouse_x as i64, mouse_y as i64), scale);
+                (image.width() > 0 && image.height() > 0).then_some(Tooltip { image, mouse, scale })
+            })
+            .flatten();
+        let cands = engine.corrected.identify(&Input { crop: &crop, slots: (slot_w, slot_h), tooltip: tooltip.as_ref() });
         let out = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
         let mut n = 0;
         for (slot, c) in out.iter_mut().zip(cands) {

@@ -2,7 +2,7 @@
 use super::{ocr::Ocr, Candidate, Identifier, Input, Tooltip};
 use crate::catalog::Catalog;
 use crate::lexicon;
-use image::imageops;
+use image::{imageops, RgbImage};
 use std::sync::Arc;
 
 /// Minimum full-name score to trust a tooltip reading.
@@ -17,21 +17,62 @@ fn luma(p: &image::Rgb<u8>) -> u32 {
     (299 * p[0] as u32 + 587 * p[1] as u32 + 114 * p[2] as u32) / 1000
 }
 
+/// Interior of EFT's tooltip box is pure black; nothing else in the inventory UI is.
+fn is_box(p: &image::Rgb<u8>) -> bool {
+    p.0.iter().all(|&c| c <= 4)
+}
+
+/// Interior (x0, y0, x1, y1 exclusive) of the black tooltip box nearest the cursor within
+/// `[y0, y1)`, or `None` when no box is visible. Text search is confined to it: across the
+/// whole window other labels and icon art merge every row into one band.
+fn locate_box(img: &RgbImage, mouse: (u32, u32), y0: u32, y1: u32, s: f32) -> Option<(u32, u32, u32, u32)> {
+    let min_run = (30.0 * s).round() as u32;
+    let (mx, my) = mouse;
+    let mut best: Option<(u32, u32, u32, u64)> = None; // (y, l, r, distance²)
+    for y in y0..y1 {
+        let mut x = 0;
+        while x < img.width() {
+            if !is_box(img.get_pixel(x, y)) {
+                x += 1;
+                continue;
+            }
+            let l = x;
+            while x < img.width() && is_box(img.get_pixel(x, y)) {
+                x += 1;
+            }
+            if x - l >= min_run {
+                let dx = if mx < l { l - mx } else { mx.saturating_sub(x - 1) } as u64;
+                let d = dx * dx + (y.abs_diff(my) as u64).pow(2);
+                if best.is_none_or(|b| d < b.3) {
+                    best = Some((y, l, x, d));
+                }
+            }
+        }
+    }
+    let (y, l, r, _) = best?;
+    // Just inside the left edge: the text starts further in, so this column is all box.
+    let edge = l + 1;
+    let col = |y: u32| is_box(img.get_pixel(edge, y));
+    let top = (0..=y).rev().take_while(|&v| col(v)).last()?;
+    let bottom = (y..img.height()).take_while(|&v| col(v)).last()? + 1;
+    Some((l, top, r, bottom))
+}
+
 /// Bounding box (x, y, w, h) of the bright text line nearest the cursor, if any.
 pub fn locate_name(tip: &Tooltip) -> Option<(u32, u32, u32, u32)> {
     let img = &tip.image;
     let s = tip.scale;
     let (mx, my) = tip.mouse;
-    let x0 = mx.min(img.width());
     let reach = (100.0 * s).round() as u32;
-    let y0 = my.saturating_sub(reach);
-    let y1 = (my + reach).min(img.height());
-    let peak = (y0..y1).flat_map(|y| (x0..img.width()).map(move |x| (x, y))).map(|(x, y)| luma(img.get_pixel(x, y))).max()?;
+    let (bx0, y0, bx1, y1) = locate_box(img, tip.mouse, my.saturating_sub(reach), (my + reach).min(img.height()), s)
+        .unwrap_or((mx.min(img.width()), my.saturating_sub(reach), img.width(), (my + reach).min(img.height())));
+    let (x0, xe) = (bx0, bx1);
+    let peak = (y0..y1).flat_map(|y| (x0..xe).map(move |x| (x, y))).map(|(x, y)| luma(img.get_pixel(x, y))).max()?;
     let thr = TEXT_LUMA.min((peak as f32 * TEXT_REL) as u32).max(TEXT_FLOOR);
     let text = |x: u32, y: u32| luma(img.get_pixel(x, y)) >= thr;
 
     // Row bands of text.
-    let rows: Vec<bool> = (y0..y1).map(|y| (x0..img.width()).filter(|&x| text(x, y)).count() >= 2).collect();
+    let rows: Vec<bool> = (y0..y1).map(|y| (x0..xe).filter(|&x| text(x, y)).count() >= 2).collect();
     let (min_h, max_h) = ((8.0 * s).round() as u32, (30.0 * s).round() as u32);
     let mut bands: Vec<(u32, u32)> = Vec::new(); // (top, bottom exclusive)
     let mut cur: Option<(u32, u32)> = None;
@@ -58,7 +99,7 @@ pub fn locate_name(tip: &Tooltip) -> Option<(u32, u32, u32, u32)> {
     // Blurred small text binarises spottily, so tolerate gaps up to one line height.
     let gap = ((12.0 * s).round() as u32).max(bottom - top);
     let mut segs: Vec<(u32, u32)> = Vec::new();
-    for x in x0..img.width() {
+    for x in x0..xe {
         if (top..bottom).any(|y| text(x, y)) {
             match segs.last_mut() {
                 Some((_, e)) if x <= *e + gap => *e = x + 1,

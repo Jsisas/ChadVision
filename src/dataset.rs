@@ -95,7 +95,7 @@ fn write_tooltips(dir: &Path, rows: &[TipRow]) -> Result<()> {
 
 /// Tooltip search window around the cursor: x ∈ [mx−40s, mx+700s], y ∈ [my−120s, my+120s], clamped.
 /// Returns the crop and the cursor position inside it.
-fn tip_window(img: &RgbImage, mouse: (i64, i64), scale: f32) -> (RgbImage, (u32, u32)) {
+pub(crate) fn tip_window(img: &RgbImage, mouse: (i64, i64), scale: f32) -> (RgbImage, (u32, u32)) {
     let s = scale as f64;
     let x0 = (mouse.0 - (40.0 * s).round() as i64).clamp(0, img.width() as i64);
     let x1 = (mouse.0 + (700.0 * s).round() as i64).clamp(0, img.width() as i64);

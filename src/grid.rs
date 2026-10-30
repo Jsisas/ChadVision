@@ -31,11 +31,24 @@ pub struct Cell {
     pub slots: (u32, u32),
 }
 
+/// Grid lines lighten towards the top of the stash and of rigs: (73,81,84) at the bottom,
+/// about (78,93,100) in the top stash rows at 1440p. First looks accept colours close to that
+/// ramp (`RAMP_TOL`); the loose second look accepts either the ramp or `GRID_RGB` within its tolerance.
+const GRID_LIGHT: [i32; 3] = [80, 98, 106];
+
 fn is_grid(img: &RgbImage, x: i32, y: i32, tol: i32) -> bool {
-    let p = img.get_pixel(x as u32, y as u32).0;
-    let g = GRID_RGB.0;
-    (0..3).map(|i| (p[i] as i32 - g[i] as i32).abs()).sum::<i32>() <= tol
+    let p = img.get_pixel(x as u32, y as u32).0.map(i32::from);
+    let g = GRID_RGB.0.map(i32::from);
+    let d: [i32; 3] = std::array::from_fn(|i| GRID_LIGHT[i] - g[i]);
+    let t = (((p[1] - g[1]) as f32) / d[1] as f32).clamp(0.0, 1.0);
+    let ramp = (0..3).map(|i| (p[i] - g[i] - (t * d[i] as f32).round() as i32).abs()).sum::<i32>();
+    let base = (0..3).map(|i| (p[i] - g[i]).abs()).sum::<i32>();
+    // `tol` is `TOL` on the first look and `LOOSE_TOL` on the second.
+    if tol == TOL { ramp <= RAMP_TOL } else { base.min(ramp) <= tol }
 }
+/// Distance from the lightening ramp for the first look; tighter than `TOL` because the ramp
+/// covers more colours (wider tolerance found lines inside icon art).
+const RAMP_TOL: i32 = 12;
 
 /// Fraction of grid pixels on the segment `fixed` × `[from, to)` (vertical when `vertical`).
 fn line_at(img: &RgbImage, vertical: bool, fixed: i32, from: i32, to: i32, tol: i32) -> bool {
@@ -102,8 +115,16 @@ pub fn locate_cell(img: &RgbImage, mouse: (i32, i32), scale: f32, hint_slots: (u
         return None;
     }
     let pitch = PITCH * scale;
-    let (x, w, sw) = axis(img, true, mx, my, pitch, hint_slots.0)?;
     let (y, h, sh) = axis(img, false, my, mx, pitch, hint_slots.1)?;
+    // Vertical lines are probed around the mouse row and around the cell's middle row: near the
+    // top border of a top-row cell the mouse band reaches into the stash header (no lines), while
+    // icon art can hide a border at the middle row. The narrower whole-slot answer wins.
+    let at_mouse = axis(img, true, mx, my, pitch, hint_slots.0);
+    let at_middle = axis(img, true, mx, y + h / 2, pitch, hint_slots.0);
+    let (x, w, sw) = match (at_mouse, at_middle) {
+        (Some(a), Some(b)) => if b.1 < a.1 { b } else { a },
+        (a, b) => a.or(b)?,
+    };
     Some(Cell { x, y, w, h, slots: (sw, sh) })
 }
 

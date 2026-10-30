@@ -36,3 +36,25 @@ fn rig_slot_top_border_is_lighter_than_the_grid() {
     let cell = locate_cell(&img, (597, 597), SCALE_1440P, (1, 1)).map(|c| (c.x, c.y, c.slots));
     assert_eq!(cell, Some((564, 510, (1, 2))));
 }
+
+/// Top stash rows: grid lines are lighter there ((78,93,100) vs (73,81,84)), so the hovered
+/// Bandage's top border was missed and the cell merged with the Vaseline above it (1×2).
+#[test]
+fn top_row_lines_are_lighter() {
+    let img = load("grid-top-row-hover-bandage.png");
+    let cell = locate_cell(&img, (597, 227), SCALE_1440P, (1, 1)).unwrap();
+    // One slot at 1440p is 84 px; lines are 2 px wide, so a few px either way.
+    assert_eq!(cell.slots, (1, 1));
+    assert!((cell.w - 84).abs() <= 8 && (cell.h - 84).abs() <= 8, "{cell:?}");
+}
+
+/// Mouse just under the stash's top border: a probe band centred on the mouse reaches into the
+/// header, where no vertical lines exist, and the 7mm shell was read as 7×1.
+#[test]
+fn mouse_on_top_border_of_top_row() {
+    let img = load("grid-top-row-mouse-on-border.png");
+    let cell = locate_cell(&img, (597, 118), SCALE_1440P, (1, 1)).unwrap();
+    // One slot at 1440p is 84 px; lines are 2 px wide, so a few px either way.
+    assert_eq!(cell.slots, (1, 1));
+    assert!((cell.w - 84).abs() <= 8 && (cell.h - 84).abs() <= 8, "{cell:?}");
+}

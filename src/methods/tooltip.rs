@@ -123,10 +123,15 @@ pub fn read_name(ocr: &Ocr, tip: &Tooltip) -> String {
     }
 }
 
-/// Rank same-size catalog items by full-name score.
+/// Rank all catalog items by full-name score; items of size `slots` (either orientation) win ties.
+/// The name decides, not the size: the measured cell can be wrong (rig slots, misread borders).
 pub fn rank_names(catalog: &Catalog, text: &str, slots: (u32, u32), k: usize) -> Vec<(usize, f32)> {
-    let scored = catalog.candidates(slots).into_iter().map(|(i, _)| (i, lexicon::score(text, &catalog.items[i].name))).collect();
-    super::top_k(scored, k)
+    let same: std::collections::HashSet<usize> = catalog.candidates(slots).into_iter().map(|(i, _)| i).collect();
+    let mut scored: Vec<(usize, f32)> =
+        catalog.items.iter().enumerate().map(|(i, it)| (i, lexicon::score(text, &it.name))).collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| same.contains(&b.0).cmp(&same.contains(&a.0))));
+    scored.truncate(k);
+    scored
 }
 
 /// Name-only identification from the tooltip.

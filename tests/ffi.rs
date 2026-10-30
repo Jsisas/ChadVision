@@ -56,3 +56,23 @@ fn tooltip_name_overrides_icon() {
     assert_eq!(top_id(&out), truth);
     cv_close(e);
 }
+
+/// Real scan of 5.45x39mm PS gs (1×1) where the cell came from a wrong RatEye box (1×2):
+/// the tooltip name must still win, so names are matched across all sizes.
+#[test]
+fn tooltip_name_ignores_wrong_slot_size() {
+    let Some(e) = open() else { return };
+    let catalog = Catalog::load(std::path::Path::new("data/refs")).unwrap();
+    let truth = catalog.items.iter().find(|i| i.name == "5.45x39mm PS gs").expect("catalog entry").id.clone();
+    let (crop, w, h) = bgr("tests/fixtures/scan-ps-wrong-slots-crop.png");
+    let (screen, sw, sh) = bgr("tests/fixtures/scan-ps-wrong-slots-screen.png");
+    let mut out: Vec<CvCandidate> = (0..5).map(|_| CvCandidate { id: [0; 32], score: 0.0 }).collect();
+    let n = cv_identify(
+        e, crop.as_ptr(), w, h, w * 3, 1, 2,
+        screen.as_ptr(), sw, sh, sw * 3, (sw / 2) as i32, (sh / 2) as i32, 4.0 / 3.0,
+        out.as_mut_ptr(), 5,
+    );
+    assert!(n > 0);
+    assert_eq!(top_id(&out), truth);
+    cv_close(e);
+}

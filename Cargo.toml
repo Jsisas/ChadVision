@@ -1,5 +1,5 @@
 [package]
-name = "tv"
+name = "chadvision"
 version = "0.1.0"
 edition = "2021"
 
@@ -25,5 +25,5 @@ strsim = "0.11"
 debug = 1
 
 [lib]
-name = "tv"
+name = "chadvision"
 crate-type = ["cdylib", "rlib"]

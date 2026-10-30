@@ -1,4 +1,4 @@
-//! C ABI for embedding the Fusion icon identifier (see `TvCandidate`).
+//! C ABI for embedding the Fusion icon identifier (see `CvCandidate`).
 use crate::catalog::Catalog;
 use crate::methods::{embed::Embed, fusion::Fusion, ocr::Ocr, Identifier, Input};
 use crate::refs;
@@ -11,12 +11,12 @@ use std::sync::Arc;
 
 /// `id` is a NUL-padded ASCII tarkov.dev item id.
 #[repr(C)]
-pub struct TvCandidate {
+pub struct CvCandidate {
     pub id: [u8; 32],
     pub score: f32,
 }
 
-pub struct TvEngine {
+pub struct CvEngine {
     #[allow(dead_code)]
     catalog: Arc<Catalog>,
     fusion: Fusion,
@@ -37,7 +37,7 @@ fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "panic".into())
 }
 
-fn open(dir: &Path) -> anyhow::Result<TvEngine> {
+fn open(dir: &Path) -> anyhow::Result<CvEngine> {
     let refs_dir = dir.join("refs");
     let models = dir.join("models");
     let catalog = Arc::new(Catalog::load(&refs_dir)?);
@@ -50,12 +50,12 @@ fn open(dir: &Path) -> anyhow::Result<TvEngine> {
     )?);
     drop(bases);
     let fusion = Fusion::new(catalog.clone(), embed, ocr);
-    Ok(TvEngine { catalog, fusion })
+    Ok(CvEngine { catalog, fusion })
 }
 
-/// Returns null on error; see `tv_last_error`.
+/// Returns null on error; see `cv_last_error`.
 #[no_mangle]
-pub extern "C" fn tv_open(data_dir: *const c_char) -> *mut TvEngine {
+pub extern "C" fn cv_open(data_dir: *const c_char) -> *mut CvEngine {
     if data_dir.is_null() {
         set_error("data_dir is null".into());
         return std::ptr::null_mut();
@@ -79,15 +79,15 @@ pub extern "C" fn tv_open(data_dir: *const c_char) -> *mut TvEngine {
 
 /// `bgr`: rows of 3-byte B,G,R pixels, `stride` bytes per row. Returns candidate count or -1.
 #[no_mangle]
-pub extern "C" fn tv_identify(
-    e: *const TvEngine,
+pub extern "C" fn cv_identify(
+    e: *const CvEngine,
     bgr: *const u8,
     width: u32,
     height: u32,
     stride: u32,
     slot_w: u32,
     slot_h: u32,
-    out: *mut TvCandidate,
+    out: *mut CvCandidate,
     cap: u32,
 ) -> i32 {
     if e.is_null() || bgr.is_null() || out.is_null() || width == 0 || height == 0 || stride < width.saturating_mul(3) {
@@ -113,7 +113,7 @@ pub extern "C" fn tv_identify(
             let bytes = c.item_id.as_bytes();
             let len = bytes.len().min(31);
             id[..len].copy_from_slice(&bytes[..len]);
-            *slot = TvCandidate { id, score: c.score };
+            *slot = CvCandidate { id, score: c.score };
             n += 1;
         }
         n as i32
@@ -128,7 +128,7 @@ pub extern "C" fn tv_identify(
 }
 
 #[no_mangle]
-pub extern "C" fn tv_close(e: *mut TvEngine) {
+pub extern "C" fn cv_close(e: *mut CvEngine) {
     if !e.is_null() {
         drop(unsafe { Box::from_raw(e) });
     }
@@ -136,7 +136,7 @@ pub extern "C" fn tv_close(e: *mut TvEngine) {
 
 /// Copies the calling thread's last error into `buf` (NUL-terminated); returns bytes written excl. NUL.
 #[no_mangle]
-pub extern "C" fn tv_last_error(buf: *mut c_char, cap: u32) -> u32 {
+pub extern "C" fn cv_last_error(buf: *mut c_char, cap: u32) -> u32 {
     if buf.is_null() || cap == 0 {
         return 0;
     }

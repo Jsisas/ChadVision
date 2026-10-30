@@ -23,7 +23,7 @@ const ITEMS_EN_URL: &str = "https://json.tarkov.dev/regular/items_en";
 
 pub fn http() -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
-        .user_agent("tarkov-vision/0.1")
+        .user_agent("ChadVision/0.1")
         .timeout(std::time::Duration::from_secs(120))
         .build()?)
 }

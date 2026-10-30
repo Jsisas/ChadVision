@@ -1,5 +1,5 @@
-use tv::{bench, catalog, dataset, refs};
-use tv::methods::{corrected::Corrected, embed::Embed, fusion::Fusion, ocr::Ocr, template::Template, tooltip::TooltipName, Identifier};
+use chadvision::{bench, catalog, dataset, refs};
+use chadvision::methods::{corrected::Corrected, embed::Embed, fusion::Fusion, ocr::Ocr, template::Template, tooltip::TooltipName, Identifier};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};

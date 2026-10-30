@@ -320,6 +320,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "chadvision"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "clap",
+ "fast_image_resize",
+ "image",
+ "imageproc",
+ "ndarray",
+ "num_cpus",
+ "ort",
+ "rand 0.9.5",
+ "rand_chacha",
+ "rayon",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "strsim",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2507,28 +2529,6 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
-
-[[package]]
-name = "tv"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "clap",
- "fast_image_resize",
- "image",
- "imageproc",
- "ndarray",
- "num_cpus",
- "ort",
- "rand 0.9.5",
- "rand_chacha",
- "rayon",
- "reqwest",
- "serde",
- "serde_json",
- "strsim",
-]
 
 [[package]]
 name = "typenum"

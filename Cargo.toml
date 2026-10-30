@@ -12,7 +12,6 @@ image = { version = "0.25", default-features = false, features = ["png", "webp",
 imageproc = "0.27.0"
 ndarray = "0.16"
 num_cpus = "1"
-ort = { version = "=2.0.0-rc.10", features = ["download-binaries", "ndarray"] }
 rand = "0.9"
 rand_chacha = "0.9"
 rayon = "1"
@@ -24,10 +23,13 @@ strsim = "0.11"
 [profile.release]
 debug = 1
 
+[target.'cfg(not(windows))'.dependencies]
+ort = { version = "=2.0.0-rc.10", features = ["download-binaries", "ndarray"] }
+
 # Windows: the prebuilt static ONNX Runtime needs DirectML.lib, which cross-compiling from Linux lacks.
 # Load onnxruntime.dll (1.22.x, shipped next to the exe) at runtime instead.
 [target.'cfg(windows)'.dependencies]
-ort = { version = "=2.0.0-rc.10", features = ["load-dynamic"] }
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
 
 [lib]
 name = "chadvision"

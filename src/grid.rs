@@ -14,8 +14,9 @@ const TOL: i32 = 24;
 const LINE_FRAC: f32 = 0.6;
 /// Widest item searched for, in slots.
 const MAX_SLOTS: f32 = 12.0;
-/// A measured side must be this close to a whole number of slots.
-const SLOT_SNAP: f32 = 0.2;
+/// A measured side must be this close to a whole number of slots. Measured cells land within
+/// 0.06; 0.2 accepted a grid-coloured run inside icon art as an edge (0.81 of a slot).
+const SLOT_SNAP: f32 = 0.1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
@@ -39,32 +40,37 @@ fn line_at(img: &RgbImage, vertical: bool, fixed: i32, from: i32, to: i32) -> bo
     hits as f32 / n as f32 >= LINE_FRAC
 }
 
-/// Nearest line on each side of `m` along one axis; `cross` is the other coordinate of the mouse.
-fn edges(img: &RgbImage, vertical: bool, m: i32, cross: i32, pitch: f32) -> (Option<i32>, Option<i32>) {
+/// Lines on each side of `m` along one axis, nearest first; `cross` is the other coordinate of
+/// the mouse. Icon art can contain grid-coloured runs, so more than the nearest line is kept.
+fn edges(img: &RgbImage, vertical: bool, m: i32, cross: i32, pitch: f32) -> (Vec<i32>, Vec<i32>) {
     let (len, cross_len) = if vertical { (img.width() as i32, img.height() as i32) } else { (img.height() as i32, img.width() as i32) };
     let band = (pitch / 3.0) as i32;
     let (from, to) = ((cross - band).max(0), (cross + band).min(cross_len));
     let reach = (pitch * MAX_SLOTS) as i32;
-    let low = (((m - reach).max(0))..=m.min(len - 1)).rev().find(|&v| line_at(img, vertical, v, from, to));
-    let high = ((m + 1).max(0)..(m + reach).min(len)).find(|&v| line_at(img, vertical, v, from, to));
+    let low = (((m - reach).max(0))..=m.min(len - 1)).rev().filter(|&v| line_at(img, vertical, v, from, to)).collect();
+    let high = ((m + 1).max(0)..(m + reach).min(len)).filter(|&v| line_at(img, vertical, v, from, to)).collect();
     (low, high)
 }
 
-/// Start, length and slot count along one axis. One missing edge (e.g. the stash viewport cuts
-/// the last row) is filled in from `hint` slots.
-fn side(low: Option<i32>, high: Option<i32>, pitch: f32, hint: u32) -> Option<(i32, i32, u32)> {
+/// Start, length and slot count along one axis: the nearest pair of lines that spans a whole
+/// number of slots. One missing edge (e.g. the stash viewport cuts the last row) is filled in
+/// from `hint` slots.
+fn side(low: &[i32], high: &[i32], pitch: f32, hint: u32) -> Option<(i32, i32, u32)> {
     let hint = hint.max(1);
-    match (low, high) {
-        (Some(a), Some(b)) => {
-            let slots = (b - a) as f32 / pitch;
-            let n = slots.round();
-            (n >= 1.0 && (slots - n).abs() <= SLOT_SNAP).then(|| (a, b - a, n as u32))
+    let len = (hint as f32 * pitch).round() as i32;
+    match (low.first(), high.first()) {
+        (Some(_), Some(_)) => {
+            let mut pairs: Vec<(i32, i32)> = low.iter().flat_map(|&a| high.iter().map(move |&b| (a, b))).collect();
+            // Nearest to the mouse first: the inner pair has the smallest span.
+            pairs.sort_by_key(|&(a, b)| b - a);
+            pairs.into_iter().find_map(|(a, b)| {
+                let slots = (b - a) as f32 / pitch;
+                let n = slots.round();
+                (n >= 1.0 && (slots - n).abs() <= SLOT_SNAP).then(|| (a, b - a, n as u32))
+            })
         }
-        (Some(a), None) => Some((a, (hint as f32 * pitch).round() as i32, hint)),
-        (None, Some(b)) => {
-            let len = (hint as f32 * pitch).round() as i32;
-            Some((b - len, len, hint))
-        }
+        (Some(&a), None) => Some((a, len, hint)),
+        (None, Some(&b)) => Some((b - len, len, hint)),
         (None, None) => None,
     }
 }
@@ -79,7 +85,32 @@ pub fn locate_cell(img: &RgbImage, mouse: (i32, i32), scale: f32, hint_slots: (u
     let pitch = PITCH * scale;
     let (l, r) = edges(img, true, mx, my, pitch);
     let (t, b) = edges(img, false, my, mx, pitch);
-    let (x, w, sw) = side(l, r, pitch, hint_slots.0)?;
-    let (y, h, sh) = side(t, b, pitch, hint_slots.1)?;
+    let (x, w, sw) = side(&l, &r, pitch, hint_slots.0)?;
+    let (y, h, sh) = side(&t, &b, pitch, hint_slots.1)?;
     Some(Cell { x, y, w, h, slots: (sw, sh) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stash grid at 1440p (84 px slots) with the 1×1 item at slot (1, 1) and a grid-coloured
+    /// stripe inside its icon art, as on the condensed milk can.
+    #[test]
+    fn ignores_grid_coloured_icon_art() {
+        let scale = 4.0 / 3.0;
+        let p = 84;
+        let mut img = RgbImage::from_pixel(5 * p as u32, 5 * p as u32, image::Rgb([30, 32, 33]));
+        for v in (0..5 * p).step_by(p as usize) {
+            for t in 0..5 * p {
+                img.put_pixel(v as u32, t as u32, GRID_RGB);
+                img.put_pixel(t as u32, v as u32, GRID_RGB);
+            }
+        }
+        for y in p..2 * p {
+            img.put_pixel((p + 16) as u32, y as u32, GRID_RGB);
+        }
+        let cell = locate_cell(&img, (p + 30, p + 30), scale, (1, 1)).expect("cell");
+        assert_eq!((cell.x, cell.y, cell.w, cell.h, cell.slots), (p, p, p, p, (1, 1)));
+    }
 }

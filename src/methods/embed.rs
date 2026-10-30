@@ -1,5 +1,5 @@
 //! Embedding retrieval: DINOv2-small CLS token, cosine similarity against reference embeddings.
-use super::{top_k, Candidate, Identifier};
+use super::{top_k, Candidate, Identifier, Input};
 use crate::catalog::Catalog;
 use crate::imgops::{crop_to_base, letterbox, resize};
 use anyhow::{bail, Context, Result};
@@ -135,8 +135,8 @@ impl Identifier for Embed {
         "embed"
     }
 
-    fn identify(&self, crop: &RgbImage, slots: (u32, u32)) -> Vec<Candidate> {
-        self.scores(crop, slots, 5)
+    fn identify(&self, input: &Input) -> Vec<Candidate> {
+        self.scores(input.crop, input.slots, 5)
             .into_iter()
             .map(|(i, s)| Candidate { item_id: self.catalog.items[i].id.clone(), score: s })
             .collect()

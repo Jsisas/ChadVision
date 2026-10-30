@@ -1,6 +1,6 @@
 //! Constrained short-name OCR: PP-OCRv5 recognition on the icon's top strip, matched only
 //! against short names of items with the same slot size.
-use super::{Candidate, Identifier};
+use super::{Candidate, Identifier, Input};
 use crate::catalog::Catalog;
 use crate::imgops::{crop_scale, resize, PITCH};
 use crate::lexicon;
@@ -52,10 +52,14 @@ impl Ocr {
     }
 
     pub fn read(&self, crop: &RgbImage, slots: (u32, u32)) -> String {
-        let strip = Self::strip(crop, slots);
+        self.read_line(&Self::strip(crop, slots))
+    }
+
+    /// Recognise a single text line image (any size; resized to the model input height).
+    pub fn read_line(&self, line: &RgbImage) -> String {
         let h = self.input_h;
-        let w = ((strip.width() as f32 * h as f32 / strip.height() as f32).round() as u32).max(8);
-        let img = resize(&strip, w, h);
+        let w = ((line.width() as f32 * h as f32 / line.height() as f32).round() as u32).max(8);
+        let img = resize(line, w, h);
         let pw = w.div_ceil(8) * 8;
         let mut x = Array4::<f32>::zeros((1, 3, h as usize, pw as usize));
         for (px, py, p) in img.enumerate_pixels() {
@@ -91,7 +95,8 @@ impl Identifier for Ocr {
         "ocr"
     }
 
-    fn identify(&self, crop: &RgbImage, slots: (u32, u32)) -> Vec<Candidate> {
+    fn identify(&self, input: &Input) -> Vec<Candidate> {
+        let (crop, slots) = (input.crop, input.slots);
         let text = self.read(crop, slots);
         let cands = self.catalog.candidates(slots);
         lexicon::rank(&text, cands.iter().map(|&(i, _)| (i, self.catalog.items[i].short_name.as_str())), 5)

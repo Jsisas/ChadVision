@@ -1,7 +1,6 @@
 //! Embedding top-10, rescored with short-name OCR only when retrieval is ambiguous.
-use super::{embed::Embed, ocr::Ocr, Candidate, Identifier};
+use super::{embed::Embed, ocr::Ocr, Candidate, Identifier, Input};
 use crate::catalog::Catalog;
-use image::RgbImage;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -29,7 +28,8 @@ impl Identifier for Fusion {
         "fusion"
     }
 
-    fn identify(&self, crop: &RgbImage, slots: (u32, u32)) -> Vec<Candidate> {
+    fn identify(&self, input: &Input) -> Vec<Candidate> {
+        let (crop, slots) = (input.crop, input.slots);
         let mut pool = self.embed.scores(crop, slots, POOL);
         let confident = match pool.as_slice() {
             [a, b, ..] => a.1 - b.1 >= MARGIN && a.1 >= CONFIDENT,

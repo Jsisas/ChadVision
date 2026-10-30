@@ -1,6 +1,6 @@
 use crate::catalog::Catalog;
-use crate::dataset::{read_labels, Sample};
-use crate::methods::Identifier;
+use crate::dataset::{read_labels, read_tooltips, Sample};
+use crate::methods::{Identifier, Input, Tooltip};
 use anyhow::{Context, Result};
 use image::RgbImage;
 use std::collections::HashMap;
@@ -26,6 +26,8 @@ Methods beyond these tools, measured here:
 - **ocr**: PP-OCRv5 mobile Latin recognition on the icon's top strip, greedy CTC, folded Levenshtein against same-size short names, reject below 0.5.
 - **fusion**: embed top-10; if top1−top2 < 0.05 or top1 < 0.85, rescore with 0.6·embed + 0.4·ocr.
 - **template**: RatEye baseline reimplemented (1 − min SqDiffNormed over ±4 px, RGB, base scale).
+- **tooltip**: name-only. The bright text line nearest the cursor in the hover tooltip is OCR'd (PP-OCRv5) and matched by folded Levenshtein against full names of same-size items; reject below 0.8.
+- **icon+tooltip**: two-stage. `fusion` answers first; when a tooltip is present its name (score ≥ 0.8, first among fusion's top-5, then all same-size items) replaces the icon answer.
 "#;
 
 #[derive(Default)]
@@ -35,6 +37,13 @@ struct Stats {
     top5: usize,
     rejects: usize,
     ms: Vec<f64>,
+    first_ms: Vec<f64>,
+    /// Two-stage outcomes: icon wrong→final right, right→wrong, right→right, wrong→wrong, tooltip read.
+    fixed: usize,
+    broken: usize,
+    kept_right: usize,
+    kept_wrong: usize,
+    attempted: usize,
     confusions: HashMap<(String, String), usize>,
 }
 
@@ -87,9 +96,24 @@ pub fn run(
         .iter()
         .map(|s| image::open(set.join(&s.file)).map(|d| d.to_rgb8()).with_context(|| s.file.clone()))
         .collect::<Result<_>>()?;
-    if let (Some(s), Some(c)) = (samples.first(), crops.first()) {
+    let tip_map = read_tooltips(set)?;
+    let tips: Vec<Option<Tooltip>> = samples
+        .iter()
+        .map(|s| {
+            tip_map
+                .get(&s.file)
+                .map(|(f, mouse, scale)| {
+                    let image = image::open(set.join(f)).with_context(|| f.clone())?.to_rgb8();
+                    Ok(Tooltip { image, mouse: *mouse, scale: *scale })
+                })
+                .transpose()
+        })
+        .collect::<Result<_>>()?;
+    let inputs: Vec<Input> =
+        samples.iter().zip(&crops).zip(&tips).map(|((s, c), t)| Input { crop: c, slots: s.slots, tooltip: t.as_ref() }).collect();
+    if let Some(i) = inputs.first() {
         for m in methods {
-            m.identify(c, s.slots);
+            m.identify(i);
         }
     }
     let warm_ocr: Vec<usize> = methods.iter().map(|m| m.ocr_runs().unwrap_or(0)).collect();
@@ -98,15 +122,30 @@ pub fn run(
     let mut log = String::from("file\ttruth\tslots\tmethod\tpred\tscore\tok\tms\n");
     let mut stats: Vec<Stats> = methods.iter().map(|_| Stats::default()).collect();
     let progress = Instant::now();
-    for (n, (s, crop)) in samples.iter().zip(&crops).enumerate() {
+    for (n, (s, input)) in samples.iter().zip(&inputs).enumerate() {
         let truth_short = catalog.short_name(&s.item_id).to_string();
         let truth_group = catalog.index(&s.item_id).map(|i| groups[i]);
         for (m, st) in methods.iter().zip(stats.iter_mut()) {
             let t = Instant::now();
-            let cands = m.identify(crop, s.slots);
-            st.ms.push(t.elapsed().as_secs_f64() * 1e3);
+            let cands = m.identify(input);
+            let ms = t.elapsed().as_secs_f64() * 1e3;
+            st.ms.push(ms);
             let pred = cands.first();
             let ok = pred.is_some_and(|c| c.item_id == s.item_id);
+            match m.last_stages() {
+                Some(stg) => {
+                    st.first_ms.push(stg.first_ms);
+                    st.attempted += stg.used_tooltip as usize;
+                    let first_ok = stg.first_id.as_deref() == Some(s.item_id.as_str());
+                    match (first_ok, ok) {
+                        (false, true) => st.fixed += 1,
+                        (true, false) => st.broken += 1,
+                        (true, true) => st.kept_right += 1,
+                        (false, false) => st.kept_wrong += 1,
+                    }
+                }
+                None => st.first_ms.push(ms),
+            }
             match pred {
                 None => st.rejects += 1,
                 Some(c) if !ok => {
@@ -140,6 +179,7 @@ pub fn run(
     let mut rows = Vec::new();
     for ((m, st), warm) in methods.iter().zip(stats.iter_mut()).zip(&warm_ocr) {
         st.ms.sort_by(f64::total_cmp);
+        st.first_ms.sort_by(f64::total_cmp);
         rows.push((
             m.name(),
             pct(st.top1, total),
@@ -150,6 +190,7 @@ pub fn run(
             quantile(&st.ms, 0.95),
             st.ms.last().copied().unwrap_or(0.0),
             m.ocr_runs().map(|r| pct(r - warm, total)),
+            quantile(&st.first_ms, 0.95),
         ));
     }
 
@@ -164,34 +205,52 @@ pub fn run(
             "- **Provisional**: the decision requires ≥300 real RatEyeGroundTruth captures; this run has {total} samples from `{set_name}`."
         );
     }
+    let tip_cov = pct(tips.iter().filter(|t| t.is_some()).count(), total);
+    let _ = writeln!(r, "- Tooltip coverage: {tip_cov:.1}% of samples");
+    if set_name != "real" && tip_cov > 0.0 {
+        let _ = writeln!(
+            r,
+            "- **Synthetic tooltips**: rendered with DejaVu Sans on a flat box, not Tarkov's font or styling; `tooltip`/`icon+tooltip` numbers are for development only."
+        );
+    }
     let _ = writeln!(r, "\n{CONTEXT}");
     let _ = writeln!(r, "## 2. Results\n");
-    let _ = writeln!(r, "|Method|Top-1 %|Top-1 % (identical icons merged)|Top-5 %|Reject %|p50 ms|p95 ms|max ms|OCR trigger %|");
-    let _ = writeln!(r, "|---|---:|---:|---:|---:|---:|---:|---:|---:|");
-    for (name, t1, t1e, t5, rej, p50, p95, max, ocr) in &rows {
+    let _ = writeln!(r, "|Method|Top-1 %|Top-1 % (identical icons merged)|Top-5 %|Reject %|p50 ms|p95 ms|first p95 ms|max ms|OCR trigger %|Tooltip coverage %|");
+    let _ = writeln!(r, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for (name, t1, t1e, t5, rej, p50, p95, max, ocr, first) in &rows {
         let ocr = ocr.map(|v| format!("{v:.1}")).unwrap_or_else(|| "—".into());
-        let _ = writeln!(r, "|{name}|{t1:.2}|{t1e:.2}|{t5:.2}|{rej:.2}|{p50:.2}|{p95:.2}|{max:.2}|{ocr}|");
+        let _ = writeln!(r, "|{name}|{t1:.2}|{t1e:.2}|{t5:.2}|{rej:.2}|{p50:.2}|{p95:.2}|{first:.2}|{max:.2}|{ocr}|{tip_cov:.1}|");
     }
     let _ = writeln!(
         r,
         "\nLatency is wall time of one `identify` call, samples run sequentially (methods parallelise internally). \
+        \"first p95\" is time to the first displayed answer (the icon stage for `icon+tooltip`, otherwise = p95). \
         \"Identical icons merged\" counts a prediction as correct when its reference image is byte-identical to the truth's; it is informational only."
     );
+
+    for (m, st) in methods.iter().zip(&stats).filter(|(m, _)| m.last_stages().is_some()) {
+        let _ = writeln!(r, "\n### Correction stage: `{}`\n", m.name());
+        let _ = writeln!(r, "|Fixed (icon wrong → right)|Broken (icon right → wrong)|Unchanged right|Unchanged wrong|Corrections attempted (tooltip read)|");
+        let _ = writeln!(r, "|---:|---:|---:|---:|---:|");
+        let _ = writeln!(r, "|{}|{}|{}|{}|{}|", st.fixed, st.broken, st.kept_right, st.kept_wrong, st.attempted);
+    }
 
     let _ = writeln!(r, "\n## 3. Decision\n");
     let _ = writeln!(
         r,
         "Rule: (1) highest top-1 wins; (2) methods within {TIE_PP:.1} pp of the best top-1 are tied and the lowest p95 among them wins; \
-        (3) target is top-1 ≥ {TARGET_TOP1}% and p95 ≤ {TARGET_P95_MS} ms on CPU.\n"
+        (3) target is top-1 ≥ {TARGET_TOP1}% and p95 ≤ {TARGET_P95_MS} ms on CPU. \
+        For `icon+tooltip` latency is judged on first p95 (time to the icon answer); the tooltip correction arrives later.\n"
     );
+    let latency = |r: &(&str, f64, f64, f64, f64, f64, f64, f64, Option<f64>, f64)| if r.0 == "icon+tooltip" { r.9 } else { r.6 };
     let best_t1 = rows.iter().map(|r| r.1).fold(f64::MIN, f64::max);
     let winner = rows
         .iter()
         .filter(|r| best_t1 - r.1 <= TIE_PP)
-        .min_by(|a, b| a.6.total_cmp(&b.6))
+        .min_by(|a, b| latency(a).total_cmp(&latency(b)))
         .context("no methods")?;
-    let _ = writeln!(r, "**Winner: `{}`** — top-1 {:.2}%, p95 {:.2} ms.", winner.0, winner.1, winner.6);
-    let meets: Vec<&str> = rows.iter().filter(|r| r.1 >= TARGET_TOP1 && r.6 <= TARGET_P95_MS).map(|r| r.0).collect();
+    let _ = writeln!(r, "**Winner: `{}`** — top-1 {:.2}%, p95 {:.2} ms, first p95 {:.2} ms.", winner.0, winner.1, winner.6, winner.9);
+    let meets: Vec<&str> = rows.iter().filter(|r| r.1 >= TARGET_TOP1 && latency(r) <= TARGET_P95_MS).map(|r| r.0).collect();
     if meets.is_empty() {
         let _ = writeln!(r, "\n**No method meets the target.** Confusions to address next are listed below.");
     } else {

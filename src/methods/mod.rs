@@ -1,7 +1,9 @@
+pub mod corrected;
 pub mod embed;
 pub mod fusion;
 pub mod ocr;
 pub mod template;
+pub mod tooltip;
 
 use image::RgbImage;
 
@@ -11,12 +13,41 @@ pub struct Candidate {
     pub score: f32,
 }
 
+/// Hover tooltip search window; `mouse` is the cursor position inside `image`.
+pub struct Tooltip {
+    pub image: RgbImage,
+    pub mouse: (u32, u32),
+    pub scale: f32,
+}
+
+/// One identification request: `crop` is the padded cell crop, `slots` the on-screen (width, height).
+pub struct Input<'a> {
+    pub crop: &'a RgbImage,
+    pub slots: (u32, u32),
+    pub tooltip: Option<&'a Tooltip>,
+}
+
+/// First stage of a two-stage method.
+#[derive(Debug, Clone)]
+pub struct Stages {
+    /// Wall time until the first (icon) answer.
+    pub first_ms: f64,
+    /// Whether a tooltip was read.
+    pub used_tooltip: bool,
+    /// Top-1 of the first answer; `None` when it rejected.
+    pub first_id: Option<String>,
+}
+
 pub trait Identifier: Sync {
     fn name(&self) -> &'static str;
-    /// `crop` is the padded cell crop; `slots` is the on-screen (width, height). Sorted desc, len <= 5.
-    fn identify(&self, crop: &RgbImage, slots: (u32, u32)) -> Vec<Candidate>;
+    /// Sorted desc, len <= 5.
+    fn identify(&self, input: &Input) -> Vec<Candidate>;
     /// Number of `identify` calls that ran OCR, for methods where OCR is conditional.
     fn ocr_runs(&self) -> Option<usize> {
+        None
+    }
+    /// For staged methods: timing and first answer of the last `identify` call.
+    fn last_stages(&self) -> Option<Stages> {
         None
     }
 }

@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ab_glyph = "0.2.32"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 fast_image_resize = { version = "5", features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png", "webp", "jpeg"] }
+imageproc = "0.27.0"
 ndarray = "0.16"
 num_cpus = "1"
 ort = { version = "=2.0.0-rc.10", features = ["download-binaries", "ndarray"] }
@@ -21,3 +23,7 @@ strsim = "0.11"
 
 [profile.release]
 debug = 1
+
+[lib]
+name = "tv"
+crate-type = ["cdylib", "rlib"]

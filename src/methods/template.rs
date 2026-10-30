@@ -1,5 +1,5 @@
 //! RatEye baseline: SqDiffNormed template matching against every same-size reference.
-use super::{top_k, Candidate, Identifier};
+use super::{top_k, Candidate, Identifier, Input};
 use crate::catalog::Catalog;
 use crate::imgops::crop_to_base_padded;
 use image::{imageops, RgbImage};
@@ -70,7 +70,8 @@ impl Identifier for Template {
         "template"
     }
 
-    fn identify(&self, crop: &RgbImage, slots: (u32, u32)) -> Vec<Candidate> {
+    fn identify(&self, input: &Input) -> Vec<Candidate> {
+        let (crop, slots) = (input.crop, input.slots);
         let src = crop_to_base_padded(crop, slots);
         let (sw, sh) = (src.width() as usize, src.height() as usize);
         let px: Vec<f32> = src.as_raw().iter().map(|&v| v as f32).collect();

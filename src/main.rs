@@ -1,14 +1,8 @@
-mod bench;
-mod catalog;
-mod dataset;
-mod imgops;
-mod lexicon;
-mod methods;
-mod refs;
+use tv::{bench, catalog, dataset, refs};
+use tv::methods::{corrected::Corrected, embed::Embed, fusion::Fusion, ocr::Ocr, template::Template, tooltip::TooltipName, Identifier};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use methods::{embed::Embed, fusion::Fusion, ocr::Ocr, template::Template, Identifier};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -60,6 +54,9 @@ enum Cmd {
         per_item: u32,
         #[arg(long, default_value_t = 42)]
         seed: u64,
+        /// Render a synthetic hover tooltip (full item name) per sample; `--tooltips false` to skip.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        tooltips: bool,
     },
     /// Run all methods over a labelled set and write a Markdown report.
     Bench {
@@ -74,7 +71,7 @@ enum Cmd {
         models: PathBuf,
         #[arg(long, default_value = "data/index")]
         index: PathBuf,
-        #[arg(long, value_delimiter = ',', default_value = "template,embed,ocr,fusion")]
+        #[arg(long, value_delimiter = ',', default_value = "template,embed,ocr,fusion,tooltip,icon+tooltip")]
         methods: Vec<String>,
         /// Evenly subsample the set to at most this many samples.
         #[arg(long)]
@@ -105,8 +102,8 @@ fn main() -> Result<()> {
         Cmd::ImportGt { src, out, fixtures, refs } => {
             dataset::import_gt(src.as_deref(), &out, fixtures.as_deref(), &catalog::Catalog::load(&refs)?)
         }
-        Cmd::Synth { refs, out, per_item, seed } => {
-            dataset::synth(&refs, &out, per_item, seed, &catalog::Catalog::load(&refs)?)
+        Cmd::Synth { refs, out, per_item, seed, tooltips } => {
+            dataset::synth(&refs, &out, per_item, seed, tooltips, &catalog::Catalog::load(&refs)?)
         }
         Cmd::Bench { set, out, refs, models, index, methods, limit } => {
             let catalog = Arc::new(catalog::Catalog::load(&refs)?);
@@ -114,19 +111,21 @@ fn main() -> Result<()> {
             let groups = bench::icon_groups(&bases);
             let want = |m: &str| methods.iter().any(|x| x == m);
             let template = want("template").then(|| Template::new(catalog.clone(), &bases));
-            let embed = (want("embed") || want("fusion"))
+            let staged = want("icon+tooltip");
+            let embed = (want("embed") || want("fusion") || staged)
                 .then(|| Embed::new(catalog.clone(), &bases, &models.join("dinov2-small.onnx"), &index).map(Arc::new))
                 .transpose()?;
-            let ocr = (want("ocr") || want("fusion"))
+            let ocr = (want("ocr") || want("fusion") || want("tooltip") || staged)
                 .then(|| {
                     Ocr::new(catalog.clone(), &models.join("ppocrv5_latin_rec.onnx"), &models.join("ppocrv5_latin_dict.txt"))
                         .map(Arc::new)
                 })
                 .transpose()?;
-            let fusion = match (&embed, &ocr) {
-                (Some(e), Some(o)) if want("fusion") => Some(Fusion::new(catalog.clone(), e.clone(), o.clone())),
-                _ => None,
-            };
+            let new_fusion = || Fusion::new(catalog.clone(), embed.clone().unwrap(), ocr.clone().unwrap());
+            let fusion = want("fusion").then(new_fusion);
+            let tooltip = want("tooltip").then(|| TooltipName::new(catalog.clone(), ocr.clone().unwrap()));
+            // Own Fusion instance so its OCR-trigger counter is not shared with the `fusion` row.
+            let corrected = staged.then(|| Corrected::new(catalog.clone(), Arc::new(new_fusion()), ocr.clone().unwrap()));
             let mut list: Vec<&dyn Identifier> = Vec::new();
             for m in &methods {
                 match m.as_str() {
@@ -134,6 +133,8 @@ fn main() -> Result<()> {
                     "embed" => list.push(embed.as_deref().unwrap()),
                     "ocr" => list.push(ocr.as_deref().unwrap()),
                     "fusion" => list.push(fusion.as_ref().unwrap()),
+                    "tooltip" => list.push(tooltip.as_ref().unwrap()),
+                    "icon+tooltip" => list.push(corrected.as_ref().unwrap()),
                     other => bail!("unknown method {other}"),
                 }
             }

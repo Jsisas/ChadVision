@@ -26,3 +26,13 @@ fn item_sizes_come_from_their_border_lines() {
     assert_eq!(at((160, 150)), Some((63, 78, (2, 2))), "Grizzly 2x2");
     assert_eq!(at((189, 370)), Some((147, 330, (1, 1))), "IFAK 1x1");
 }
+
+/// AK-12 magazine in a 1×2 tactical rig slot, scanned without a RatEye icon (hint 1×1). The rig
+/// grid lightens towards the top, so the top border (78,95,101) was not grid-coloured; the 1-slot
+/// hint then cut the cell to the magazine's lower half, which matched an armor.
+#[test]
+fn rig_slot_top_border_is_lighter_than_the_grid() {
+    let img = load("grid-rig-1x2-mag.png");
+    let cell = locate_cell(&img, (597, 597), SCALE_1440P, (1, 1)).map(|c| (c.x, c.y, c.slots));
+    assert_eq!(cell, Some((564, 510, (1, 2))));
+}

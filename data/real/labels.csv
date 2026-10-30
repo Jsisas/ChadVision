@@ -1,0 +1,4 @@
+file,item_id,slot_w,slot_h,rotated,scale
+fixture-propital.png,5c0e530286f7747fa1419862,1,1,false,1.0000
+fixture-morphine.png,544fb3f34bdc2d03748b456a,1,1,false,1.0000
+fixture-water.png,5448fee04bdc2dbc018b4567,1,2,false,1.0000

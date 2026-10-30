@@ -1,6 +1,7 @@
 pub mod bench;
 pub mod catalog;
 pub mod dataset;
+pub mod engine;
 pub mod ffi;
 pub mod grid;
 pub mod imgops;

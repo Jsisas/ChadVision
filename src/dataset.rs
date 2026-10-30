@@ -107,7 +107,7 @@ pub(crate) fn tip_window(img: &RgbImage, mouse: (i64, i64), scale: f32) -> (RgbI
 }
 
 /// Cell rect padded like RatEye's `TryAddIcon` (round(63·scale/8) px per side), clamped to the image.
-fn padded_crop(img: &RgbImage, x: i32, y: i32, w: i32, h: i32, scale: f32) -> RgbImage {
+pub(crate) fn padded_crop(img: &RgbImage, x: i32, y: i32, w: i32, h: i32, scale: f32) -> RgbImage {
     let p = (PITCH * scale / 8.0).round() as i32;
     let x0 = (x - p).max(0);
     let y0 = (y - p).max(0);

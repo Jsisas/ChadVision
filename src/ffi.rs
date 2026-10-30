@@ -1,13 +1,11 @@
 //! C ABI for the icon identifier with hover-tooltip name correction (see `CvCandidate`).
-use crate::catalog::Catalog;
-use crate::methods::{corrected::Corrected, embed::Embed, fusion::Fusion, ocr::Ocr, Identifier, Input, Tooltip};
-use crate::refs;
+use crate::engine::Engine;
+use crate::methods::{Input, Tooltip};
 use image::RgbImage;
 use std::cell::RefCell;
 use std::ffi::{c_char, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::Arc;
 
 /// `id` is a NUL-padded ASCII tarkov.dev item id.
 #[repr(C)]
@@ -16,11 +14,7 @@ pub struct CvCandidate {
     pub score: f32,
 }
 
-pub struct CvEngine {
-    #[allow(dead_code)]
-    catalog: Arc<Catalog>,
-    corrected: Corrected,
-}
+pub type CvEngine = Engine;
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
@@ -37,29 +31,6 @@ fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "panic".into())
 }
 
-fn open(dir: &Path) -> anyhow::Result<CvEngine> {
-    // Explicit path: a bare "onnxruntime.dll" could resolve to an older copy in System32.
-    #[cfg(windows)]
-    {
-        let exe_dir = std::env::current_exe()?.parent().map(Path::to_path_buf).unwrap_or_default();
-        ort::init_from(exe_dir.join("onnxruntime.dll").to_string_lossy()).commit()?;
-    }
-    let refs_dir = dir.join("refs");
-    let models = dir.join("models");
-    let catalog = Arc::new(Catalog::load(&refs_dir)?);
-    let bases = refs::load_bases(&refs_dir, &catalog);
-    let embed = Arc::new(Embed::new(catalog.clone(), &bases, &models.join("dinov2-small.onnx"), &dir.join("index"))?);
-    let ocr = Arc::new(Ocr::new(
-        catalog.clone(),
-        &models.join("ppocrv5_latin_rec.onnx"),
-        &models.join("ppocrv5_latin_dict.txt"),
-    )?);
-    drop(bases);
-    let fusion = Arc::new(Fusion::new(catalog.clone(), embed, ocr.clone()));
-    let corrected = Corrected::new(catalog.clone(), fusion, ocr);
-    Ok(CvEngine { catalog, corrected })
-}
-
 /// Returns null on error; see `cv_last_error`.
 #[no_mangle]
 pub extern "C" fn cv_open(data_dir: *const c_char) -> *mut CvEngine {
@@ -69,7 +40,7 @@ pub extern "C" fn cv_open(data_dir: *const c_char) -> *mut CvEngine {
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         let dir = unsafe { CStr::from_ptr(data_dir) }.to_str()?;
-        open(Path::new(dir))
+        Engine::open(Path::new(dir))
     }));
     match result {
         Ok(Ok(e)) => Box::into_raw(Box::new(e)),
@@ -124,15 +95,15 @@ pub extern "C" fn cv_identify(
                 (image.width() > 0 && image.height() > 0).then_some(Tooltip { image, mouse, scale })
             })
             .flatten();
-        let cands = engine.corrected.identify(&Input { crop: &crop, slots: (slot_w, slot_h), tooltip: tooltip.as_ref() });
+        let cands = engine.identify(&Input { crop: &crop, slots: (slot_w, slot_h), tooltip: tooltip.as_ref() });
         let out = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
         let mut n = 0;
-        for (slot, c) in out.iter_mut().zip(cands) {
+        for (slot, (item_id, score)) in out.iter_mut().zip(cands) {
             let mut id = [0u8; 32];
-            let bytes = c.item_id.as_bytes();
+            let bytes = item_id.as_bytes();
             let len = bytes.len().min(31);
             id[..len].copy_from_slice(&bytes[..len]);
-            *slot = CvCandidate { id, score: c.score };
+            *slot = CvCandidate { id, score };
             n += 1;
         }
         n as i32

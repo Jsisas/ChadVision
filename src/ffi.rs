@@ -102,15 +102,7 @@ pub extern "C" fn cv_identify(
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         let engine = unsafe { &*e };
-        let (w, h, stride) = (width as usize, height as usize, stride as usize);
-        let src = unsafe { std::slice::from_raw_parts(bgr, stride * (h - 1) + w * 3) };
-        let mut buf = Vec::with_capacity(w * h * 3);
-        for row in 0..h {
-            for px in src[row * stride..row * stride + w * 3].chunks_exact(3) {
-                buf.extend_from_slice(&[px[2], px[1], px[0]]);
-            }
-        }
-        let crop = RgbImage::from_raw(width, height, buf).expect("buffer size");
+        let crop = unsafe { bgr_to_rgb(bgr, width, height, stride) };
         let cands = engine.fusion.identify(&Input { crop: &crop, slots: (slot_w, slot_h), tooltip: None });
         let out = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
         let mut n = 0;
@@ -126,6 +118,66 @@ pub extern "C" fn cv_identify(
     }));
     match result {
         Ok(n) => n,
+        Err(p) => {
+            set_error(panic_message(p));
+            -1
+        }
+    }
+}
+
+/// Copies BGR rows (`stride` bytes apart) into an RGB image. Reads `stride*(h-1) + w*3` bytes.
+unsafe fn bgr_to_rgb(bgr: *const u8, width: u32, height: u32, stride: u32) -> RgbImage {
+    let (w, h, stride) = (width as usize, height as usize, stride as usize);
+    let src = std::slice::from_raw_parts(bgr, stride * (h - 1) + w * 3);
+    let mut buf = Vec::with_capacity(w * h * 3);
+    for row in 0..h {
+        for px in src[row * stride..row * stride + w * 3].chunks_exact(3) {
+            buf.extend_from_slice(&[px[2], px[1], px[0]]);
+        }
+    }
+    RgbImage::from_raw(width, height, buf).expect("buffer size")
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CvCell {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub slot_w: u32,
+    pub slot_h: u32,
+}
+
+/// Item cell under (`mouse_x`, `mouse_y`) from the stash grid lines in a BGR screenshot.
+/// `hint_slot_*` fill in a side whose far edge is not visible. Returns 1 found, 0 not found, -1 error.
+#[no_mangle]
+pub extern "C" fn cv_locate_cell(
+    bgr: *const u8,
+    width: u32,
+    height: u32,
+    stride: u32,
+    mouse_x: i32,
+    mouse_y: i32,
+    scale: f32,
+    hint_slot_w: u32,
+    hint_slot_h: u32,
+    out: *mut CvCell,
+) -> i32 {
+    if bgr.is_null() || out.is_null() || width == 0 || height == 0 || stride < width.saturating_mul(3) || !(scale > 0.0) {
+        set_error("invalid argument".into());
+        return -1;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let img = unsafe { bgr_to_rgb(bgr, width, height, stride) };
+        crate::grid::locate_cell(&img, (mouse_x, mouse_y), scale, (hint_slot_w, hint_slot_h))
+    }));
+    match result {
+        Ok(Some(c)) => {
+            unsafe { *out = CvCell { x: c.x, y: c.y, w: c.w, h: c.h, slot_w: c.slots.0, slot_h: c.slots.1 } };
+            1
+        }
+        Ok(None) => 0,
         Err(p) => {
             set_error(panic_message(p));
             -1

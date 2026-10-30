@@ -15,7 +15,7 @@ num_cpus = "1"
 rand = "0.9"
 rand_chacha = "0.9"
 rayon = "1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "gzip"] }
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["blocking", "json", "rustls-tls", "gzip"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 strsim = "0.11"
@@ -30,6 +30,16 @@ ort = { version = "=2.0.0-rc.10", features = ["download-binaries", "ndarray"] }
 # Load onnxruntime.dll (1.22.x, shipped next to the exe) at runtime instead.
 [target.'cfg(windows)'.dependencies]
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
+
+[features]
+# HTTP downloads (refs, models) for the CLI; library users that only identify can drop it.
+default = ["fetch"]
+fetch = ["dep:reqwest"]
+
+[[bin]]
+name = "chadvision"
+path = "src/main.rs"
+required-features = ["fetch"]
 
 [lib]
 name = "chadvision"

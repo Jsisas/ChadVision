@@ -76,3 +76,25 @@ fn tooltip_name_ignores_wrong_slot_size() {
     assert_eq!(top_id(&out), truth);
     cv_close(e);
 }
+
+/// Real scan: tooltip reads "5.45x39mm PS gs", the icon's top-5 holds only "5.45x39mm PRS gs"
+/// (one letter off, 0.93). The exact catalog-wide name must win. `tooltip.png` is ChadScanner's
+/// separate tooltip capture, cursor at (60·s, 140·s).
+#[test]
+fn exact_tooltip_name_beats_near_name_in_icon_pool() {
+    let Some(e) = open() else { return };
+    let catalog = Catalog::load(std::path::Path::new("data/refs")).unwrap();
+    let truth = catalog.items.iter().find(|i| i.name == "5.45x39mm PS gs").expect("catalog entry").id.clone();
+    let (crop, w, h) = bgr("tests/fixtures/scan-ps-vs-prs-crop.png");
+    let (screen, sw, sh) = bgr("tests/fixtures/scan-ps-vs-prs-tooltip.png");
+    let s = 4.0f32 / 3.0;
+    let mut out: Vec<CvCandidate> = (0..5).map(|_| CvCandidate { id: [0; 32], score: 0.0 }).collect();
+    let n = cv_identify(
+        e, crop.as_ptr(), w, h, w * 3, 1, 1,
+        screen.as_ptr(), sw, sh, sw * 3, (60.0 * s) as i32, (140.0 * s) as i32, s,
+        out.as_mut_ptr(), 5,
+    );
+    assert!(n > 0);
+    assert_eq!(top_id(&out), truth);
+    cv_close(e);
+}

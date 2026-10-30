@@ -42,12 +42,16 @@ impl Identifier for Corrected {
             .reduce(|best, c| if c.1 > best.1 { c } else { best })
             .filter(|c| c.1 >= NAME_ACCEPT)
             .map(|(id, s)| (id.to_string(), s));
-        let chosen = from_first.or_else(|| {
-            rank_names(&self.catalog, &text, input.slots, 1)
-                .into_iter()
-                .find(|c| c.1 >= NAME_ACCEPT)
-                .map(|(i, s)| (self.catalog.items[i].id.clone(), s))
-        });
+        // The catalog-wide best name wins when it reads strictly better: near-identical names
+        // (PS gs / PRS gs) differ by one letter, so the icon's top-5 must not shadow an exact read.
+        let global = rank_names(&self.catalog, &text, input.slots, 1)
+            .into_iter()
+            .find(|c| c.1 >= NAME_ACCEPT)
+            .map(|(i, s)| (self.catalog.items[i].id.clone(), s));
+        let chosen = match (from_first, global) {
+            (Some(f), Some(g)) => Some(if g.1 > f.1 { g } else { f }),
+            (f, g) => f.or(g),
+        };
         let mut out = first;
         if let Some((id, s)) = chosen {
             if out.first().is_none_or(|c| c.item_id != id) {

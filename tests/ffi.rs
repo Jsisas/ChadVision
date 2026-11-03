@@ -98,3 +98,25 @@ fn exact_tooltip_name_beats_near_name_in_icon_pool() {
     assert_eq!(top_id(&out), truth);
     cv_close(e);
 }
+
+/// Real scans where EFT's tooltip sits above the cursor: the price line is nearer the cursor than
+/// the name line. The name must still be read, overriding the weak icon score.
+#[test]
+fn tooltip_above_cursor_reads_name_not_price() {
+    if !std::path::Path::new("data/models").exists() {
+        return;
+    }
+    let engine = chadvision::engine::Engine::open(std::path::Path::new("data")).unwrap();
+    let catalog = Catalog::load(std::path::Path::new("data/refs")).unwrap();
+    for (file, name) in [
+        ("scan-tooltip-above-vaseline.png", "Vaseline balm"),
+        ("scan-tooltip-above-bandage.png", "Army bandage"),
+        ("scan-tooltip-above-morphine.png", "Morphine injector"),
+    ] {
+        let truth = catalog.items.iter().find(|i| i.name == name).expect("catalog entry").id.clone();
+        let img = image::open(format!("tests/fixtures/{file}")).unwrap().to_rgb8();
+        let out = engine.identify_at(&img, (597, 597), 4.0 / 3.0, 5);
+        assert_eq!(out[0].0, truth, "{file}: got {out:?}");
+        assert!(out[0].1 >= 0.8, "{file}: tooltip name must lift the score, got {out:?}");
+    }
+}

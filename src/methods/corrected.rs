@@ -1,5 +1,5 @@
 //! Two-stage: fusion answer first, then corrected by the tooltip's full item name.
-use super::tooltip::{rank_names, read_name, NAME_ACCEPT};
+use super::tooltip::{rank_names, read_names, NAME_ACCEPT};
 use super::{fusion::Fusion, ocr::Ocr, Candidate, Identifier, Input, Stages};
 use crate::catalog::Catalog;
 use crate::lexicon;
@@ -34,20 +34,30 @@ impl Identifier for Corrected {
             return first;
         };
         stages.used_tooltip = true;
-        let text = read_name(&self.ocr, tip);
-        let from_first = first
+        let texts = read_names(&self.ocr, tip);
+        let from_first = texts
             .iter()
-            .filter_map(|c| Some((c.item_id.as_str(), lexicon::score(&text, &self.catalog.get(&c.item_id)?.name))))
-            // On equal name scores (duplicate full names) keep the icon's ranking.
-            .reduce(|best, c| if c.1 > best.1 { c } else { best })
-            .filter(|c| c.1 >= NAME_ACCEPT)
-            .map(|(id, s)| (id.to_string(), s));
+            .filter_map(|text| {
+                first
+                    .iter()
+                    .filter_map(|c| Some((c.item_id.as_str(), lexicon::score(text, &self.catalog.get(&c.item_id)?.name))))
+                    // On equal name scores (duplicate full names) keep the icon's ranking.
+                    .reduce(|best, c| if c.1 > best.1 { c } else { best })
+                    .filter(|c| c.1 >= NAME_ACCEPT)
+                    .map(|(id, s)| (id.to_string(), s))
+            })
+            .reduce(|best, c| if c.1 > best.1 { c } else { best });
         // The catalog-wide best name wins when it reads strictly better: near-identical names
         // (PS gs / PRS gs) differ by one letter, so the icon's top-5 must not shadow an exact read.
-        let global = rank_names(&self.catalog, &text, input.slots, 1)
-            .into_iter()
-            .find(|c| c.1 >= NAME_ACCEPT)
-            .map(|(i, s)| (self.catalog.items[i].id.clone(), s));
+        let global = texts
+            .iter()
+            .filter_map(|text| {
+                rank_names(&self.catalog, text, input.slots, 1)
+                    .into_iter()
+                    .find(|c| c.1 >= NAME_ACCEPT)
+                    .map(|(i, s)| (self.catalog.items[i].id.clone(), s))
+            })
+            .reduce(|best, c| if c.1 > best.1 { c } else { best });
         let chosen = match (from_first, global) {
             (Some(f), Some(g)) => Some(if g.1 > f.1 { g } else { f }),
             (f, g) => f.or(g),
@@ -58,6 +68,9 @@ impl Identifier for Corrected {
                 out.retain(|c| c.item_id != id);
                 out.insert(0, Candidate { item_id: id, score: s });
                 out.truncate(5);
+            } else if out[0].score < s {
+                // The tooltip confirms the icon's pick: the exact name read replaces the weak icon score.
+                out[0].score = s;
             }
         }
         *self.last.lock().unwrap() = Some(stages);

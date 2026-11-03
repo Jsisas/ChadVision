@@ -58,8 +58,8 @@ fn locate_box(img: &RgbImage, mouse: (u32, u32), y0: u32, y1: u32, s: f32) -> Op
     Some((l, top, r, bottom))
 }
 
-/// Bounding box (x, y, w, h) of the bright text line nearest the cursor, if any.
-pub fn locate_name(tip: &Tooltip) -> Option<(u32, u32, u32, u32)> {
+/// Bounding boxes (x, y, w, h) of the bright text lines in the tooltip box, top first.
+pub fn locate_lines(tip: &Tooltip) -> Vec<(u32, u32, u32, u32)> {
     let img = &tip.image;
     let s = tip.scale;
     let (mx, my) = tip.mouse;
@@ -67,7 +67,9 @@ pub fn locate_name(tip: &Tooltip) -> Option<(u32, u32, u32, u32)> {
     let (bx0, y0, bx1, y1) = locate_box(img, tip.mouse, my.saturating_sub(reach), (my + reach).min(img.height()), s)
         .unwrap_or((mx.min(img.width()), my.saturating_sub(reach), img.width(), (my + reach).min(img.height())));
     let (x0, xe) = (bx0, bx1);
-    let peak = (y0..y1).flat_map(|y| (x0..xe).map(move |x| (x, y))).map(|(x, y)| luma(img.get_pixel(x, y))).max()?;
+    let Some(peak) = (y0..y1).flat_map(|y| (x0..xe).map(move |x| (x, y))).map(|(x, y)| luma(img.get_pixel(x, y))).max() else {
+        return Vec::new();
+    };
     let thr = TEXT_LUMA.min((peak as f32 * TEXT_REL) as u32).max(TEXT_FLOOR);
     let text = |x: u32, y: u32| luma(img.get_pixel(x, y)) >= thr;
 
@@ -90,37 +92,42 @@ pub fn locate_name(tip: &Tooltip) -> Option<(u32, u32, u32, u32)> {
         }
     }
     bands.extend(cur);
-    let (top, bottom) = bands
-        .into_iter()
-        .filter(|&(t, b)| (min_h..=max_h).contains(&(b - t)))
-        .min_by_key(|&(t, _)| t.abs_diff(my))?;
-
-    // Column segments inside the band; keep the one nearest the cursor.
-    // Blurred small text binarises spottily, so tolerate gaps up to one line height.
-    let gap = ((12.0 * s).round() as u32).max(bottom - top);
-    let mut segs: Vec<(u32, u32)> = Vec::new();
-    for x in x0..xe {
-        if (top..bottom).any(|y| text(x, y)) {
-            match segs.last_mut() {
-                Some((_, e)) if x <= *e + gap => *e = x + 1,
-                _ => segs.push((x, x + 1)),
+    let mut lines = Vec::new();
+    for (top, bottom) in bands.into_iter().filter(|&(t, b)| (min_h..=max_h).contains(&(b - t))) {
+        // Column segments inside the band; keep the one nearest the cursor.
+        // Blurred small text binarises spottily, so tolerate gaps up to one line height.
+        let gap = ((12.0 * s).round() as u32).max(bottom - top);
+        let mut segs: Vec<(u32, u32)> = Vec::new();
+        for x in x0..xe {
+            if (top..bottom).any(|y| text(x, y)) {
+                match segs.last_mut() {
+                    Some((_, e)) if x <= *e + gap => *e = x + 1,
+                    _ => segs.push((x, x + 1)),
+                }
             }
         }
+        let Some((l, r)) = segs.into_iter().min_by_key(|&(l, _)| l.abs_diff(mx)) else { continue };
+        let pad = (3.0 * s).round() as u32;
+        let (bx, by) = (l.saturating_sub(pad), top.saturating_sub(pad));
+        let bw = (r + pad).min(img.width()) - bx;
+        let bh = (bottom + pad).min(img.height()) - by;
+        lines.push((bx, by, bw, bh));
     }
-    let (l, r) = segs.into_iter().min_by_key(|&(l, _)| l.abs_diff(mx))?;
-    let pad = (3.0 * s).round() as u32;
-    let (bx, by) = (l.saturating_sub(pad), top.saturating_sub(pad));
-    let bw = (r + pad).min(img.width()) - bx;
-    let bh = (bottom + pad).min(img.height()) - by;
-    Some((bx, by, bw, bh))
+    lines
 }
 
-/// OCR the item name from a tooltip; empty when no text line is found.
-pub fn read_name(ocr: &Ocr, tip: &Tooltip) -> String {
-    match locate_name(tip) {
-        Some((x, y, w, h)) => ocr.read_line(&imageops::crop_imm(&tip.image, x, y, w, h).to_image()),
-        None => String::new(),
+/// OCR candidate item names from a tooltip: each text line, then the first two lines joined
+/// (names that wrap). Empty when no text line is found.
+pub fn read_names(ocr: &Ocr, tip: &Tooltip) -> Vec<String> {
+    let mut texts: Vec<String> = locate_lines(tip)
+        .into_iter()
+        .map(|(x, y, w, h)| ocr.read_line(&imageops::crop_imm(&tip.image, x, y, w, h).to_image()))
+        .collect();
+    if texts.len() >= 2 {
+        texts.push(format!("{} {}", texts[0], texts[1]));
     }
+    texts.retain(|t| !t.trim().is_empty());
+    texts
 }
 
 /// Rank all catalog items by full-name score; items of size `slots` (either orientation) win ties.
@@ -153,8 +160,12 @@ impl Identifier for TooltipName {
 
     fn identify(&self, input: &Input) -> Vec<Candidate> {
         let Some(tip) = input.tooltip else { return Vec::new() };
-        let text = read_name(&self.ocr, tip);
-        let ranked = rank_names(&self.catalog, &text, input.slots, 5);
+        let ranked = read_names(&self.ocr, tip)
+            .iter()
+            .map(|text| rank_names(&self.catalog, text, input.slots, 5))
+            // Ties keep the earlier text.
+            .reduce(|best, r| if r.first().map(|c| c.1) > best.first().map(|c| c.1) { r } else { best })
+            .unwrap_or_default();
         if ranked.first().is_none_or(|c| c.1 < NAME_ACCEPT) {
             return Vec::new();
         }

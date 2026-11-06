@@ -13,6 +13,7 @@ pub const NAME_ONLY_ACCEPT: f32 = 0.8;
 pub struct Engine {
     pub catalog: Arc<Catalog>,
     corrected: Corrected,
+    ocr: Arc<Ocr>,
 }
 
 impl Engine {
@@ -37,8 +38,13 @@ impl Engine {
         )?);
         drop(bases);
         let fusion = Arc::new(Fusion::new(catalog.clone(), embed, ocr.clone()));
-        let corrected = Corrected::new(catalog.clone(), fusion, ocr);
-        Ok(Engine { catalog, corrected })
+        let corrected = Corrected::new(catalog.clone(), fusion, ocr.clone());
+        Ok(Engine { catalog, corrected, ocr })
+    }
+
+    /// One pre-cropped line of EFT UI text (bright text on a dark background).
+    pub fn read_line(&self, line: &RgbImage) -> String {
+        self.ocr.read_line(line)
     }
 
     /// Candidates for a padded cell crop plus the optional hover tooltip, best first.
